@@ -62,13 +62,48 @@ const PublicResults = () => {
   );
 
   // Filtrar intentos por categoría seleccionada
-  const filteredResults = (selectedCategory === "all"
+  let filteredResults = (selectedCategory === "all"
     ? attempts
     : attempts.filter((a: any) => {
         const reg = registrations.find((r: any) => r.athlete_id === a.athlete_id);
         return reg && (reg.weight_categories?.name === selectedCategory);
       })
   ).filter((a: any) => a.result === 'valid' || a.result === 'invalid');
+
+  // --- Agregar el próximo intento pendiente (en pausa) para cada atleta ---
+  // Para cada atleta, busca el siguiente intento pendiente
+  const nextAttempts: any[] = registrations.map((reg: any) => {
+    const athleteAttempts = attempts.filter((a: any) => a.athlete_id === reg.athlete_id);
+    // Encuentra el primer intento que no esté validado/inválido
+    const liftTypes = ['squat', 'bench', 'deadlift'];
+    for (let liftType of liftTypes) {
+      for (let attemptNumber = 1; attemptNumber <= 3; attemptNumber++) {
+        const found = athleteAttempts.find((a: any) => a.lift_type === liftType && a.attempt_number === attemptNumber);
+        if (!found) {
+          // Buscar el último intento registrado para ese liftType
+          const last = athleteAttempts.filter((a: any) => a.lift_type === liftType && a.attempt_number === attemptNumber - 1)[0];
+          let weight = 0;
+          if (attemptNumber === 1) {
+            // Es el opener
+            weight = reg.athletes?.[liftType + '_opener'] ?? 0;
+          } else if (last) {
+            weight = last.weight;
+          }
+          return {
+            id: reg.athlete_id + '_' + liftType + '_' + attemptNumber + '_pending',
+            athlete_id: reg.athlete_id,
+            lift_type: liftType,
+            attempt_number: attemptNumber,
+            weight,
+            result: 'pending',
+          };
+        }
+      }
+    }
+    return null;
+  }).filter(Boolean);
+  // Agregar los próximos intentos pendientes al resultado
+  filteredResults = [...filteredResults, ...nextAttempts];
 
   // Elimina la función local ProjectionView para evitar shadowing y error de inicialización
 

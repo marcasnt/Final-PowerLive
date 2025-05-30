@@ -20,7 +20,7 @@ const CompetitionControl = () => {
     liftType: 'squat' | 'bench' | 'deadlift';
     attemptNumber: number;
     competitionId: string;
-    result: 'valid' | 'invalid';
+    result: 'valid' | 'invalid' | 'pending';
   } | null>(null);
 
   const [selectedAthleteId, setSelectedAthleteId] = useState<string | null>(null);
@@ -33,8 +33,24 @@ const [rotatedRegistrations, setRotatedRegistrations] = useState<any[]>([]);
   const { data: liveState } = useLiveCompetitionState(activeCompetition?.id || "")
   const { data: registrations = [] } = useCompetitionRegistrations(activeCompetition?.id || "")
   useEffect(() => {
-    setRotatedRegistrations(registrations);
-  }, [registrations]);
+    if (!registrations || registrations.length === 0) {
+      setRotatedRegistrations([]);
+      return;
+    }
+    // Determina el opener correspondiente según la modalidad actual
+    let liftType = liveState?.current_lift_type || 'squat';
+    let openerKey = '';
+    if (liftType === 'squat') openerKey = 'squat_opener';
+    else if (liftType === 'bench') openerKey = 'bench_opener';
+    else if (liftType === 'deadlift') openerKey = 'deadlift_opener';
+    // Ordena los atletas por el opener correspondiente
+    const sorted = [...registrations].sort((a, b) => {
+      const aOpener = a.athletes?.[openerKey] ?? 0;
+      const bOpener = b.athletes?.[openerKey] ?? 0;
+      return aOpener - bOpener;
+    });
+    setRotatedRegistrations(sorted);
+  }, [registrations, liveState?.current_lift_type]);
   const updateLiveState = useUpdateLiveCompetitionState()
   const createAttempt = useCreateAttempt()
 
@@ -135,22 +151,27 @@ const [rotatedRegistrations, setRotatedRegistrations] = useState<any[]>([]);
     // Get previous attempts for this athlete and lift type
     const prevAttempts = attemptsQuery.data || [];
     const attempt_number = prevAttempts.length + 1;
-    if (attempt_number === 1) {
-      // Registrar el resultado del opener (primer intento)
-      createAttempt.mutateAsync({
-        athlete_id: registration.athlete_id,
-        competition_id: activeCompetition.id,
-        attempt_number: 1,
-        lift_type,
-        weight: registration?.[`${lift_type}_opener`] || 0,
-        result,
-      }).then(() => {
-        handleTimer('reset');
-        toast({
-          title: result === 'valid' ? "Intento válido" : "Intento inválido",
-          description: `Resultado registrado`,
-          variant: result === 'valid' ? "default" : "destructive"
-        });
+  
+    // 1. Registrar el resultado del intento actual
+    createAttempt.mutateAsync({
+      athlete_id: registration.athlete_id,
+      competition_id: activeCompetition.id,
+      attempt_number,
+      lift_type,
+      weight: attempt_number === 1 
+        ? registration?.[`${lift_type}_opener`] || 0
+        : prevAttempts[prevAttempts.length - 1].weight || 0,
+      result,
+    }).then(() => {
+      handleTimer('reset');
+      toast({
+        title: result === 'valid' ? "Intento válido" : "Intento inválido",
+        description: `Resultado registrado`,
+        variant: result === 'valid' ? "default" : "destructive"
+      });
+      
+      // 2. Si es el primer intento (opener), rotar inmediatamente
+      if (attempt_number === 1) {
         // Rotar atletas: el actual pasa al final
         let updated = rotatedRegistrations;
         const currentIdx = rotatedRegistrations.findIndex(r => r.id === selectedAthleteId);
@@ -161,41 +182,26 @@ const [rotatedRegistrations, setRotatedRegistrations] = useState<any[]>([]);
           setRotatedRegistrations(updated);
           setSelectedAthleteId(updated[0]?.id || null);
         }
-        // Si todos han hecho opener, abrir modal para segundo intento del siguiente atleta
-        const allDoneOpener = updated.every(reg => {
-          const attempts = (attemptsQuery.data || []).filter((a: any) => a.athlete_id === reg.athlete_id && a.lift_type === lift_type);
-          return attempts.length >= 1;
-        });
-        if (allDoneOpener) {
-          setPendingAttempt({
-            athleteId: updated[0]?.athlete_id,
-            liftType: lift_type,
-            attemptNumber: 2,
-            competitionId: activeCompetition.id,
-            result: 'valid', // Default, se cambia según botón
-          });
-          setShowNextAttemptModal(true);
-        }
-      }).catch((error) => {
-        toast({
-          title: "Error al registrar intento",
-          description: (error as Error).message,
-          variant: "destructive",
-        });
-      });
-      return;
-    }
-    // Abrir el modal para el segundo y tercer intento
-    if (attempt_number === 2 || attempt_number === 3) {
+        return;
+      }
+
+      // 3. Para segundo y tercer intento, pedir el peso primero
+      // Mostrar modal para ingresar peso del siguiente intento
       setPendingAttempt({
         athleteId: registration.athlete_id,
         liftType: lift_type,
         attemptNumber: attempt_number,
         competitionId: activeCompetition.id,
-        result,
+        result: 'pending', // Estado inicial es 'pending' hasta que se valide
       });
       setShowNextAttemptModal(true);
-    }
+    }).catch((error) => {
+      toast({
+        title: "Error al registrar intento",
+        description: (error as Error).message,
+        variant: "destructive",
+      });
+    });
   }
 
   // Handler for saving the next attempt's weight
