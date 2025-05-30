@@ -136,7 +136,7 @@ const [rotatedRegistrations, setRotatedRegistrations] = useState<any[]>([]);
     const prevAttempts = attemptsQuery.data || [];
     const attempt_number = prevAttempts.length + 1;
     if (attempt_number === 1) {
-      // Solo registrar el resultado del opener, NO mostrar modal
+      // Registrar el resultado del opener (primer intento)
       createAttempt.mutateAsync({
         athlete_id: registration.athlete_id,
         competition_id: activeCompetition.id,
@@ -151,6 +151,31 @@ const [rotatedRegistrations, setRotatedRegistrations] = useState<any[]>([]);
           description: `Resultado registrado`,
           variant: result === 'valid' ? "default" : "destructive"
         });
+        // Rotar atletas: el actual pasa al final
+        let updated = rotatedRegistrations;
+        const currentIdx = rotatedRegistrations.findIndex(r => r.id === selectedAthleteId);
+        if (currentIdx !== -1) {
+          updated = [...rotatedRegistrations];
+          const [moved] = updated.splice(currentIdx, 1);
+          updated.push(moved);
+          setRotatedRegistrations(updated);
+          setSelectedAthleteId(updated[0]?.id || null);
+        }
+        // Si todos han hecho opener, abrir modal para segundo intento del siguiente atleta
+        const allDoneOpener = updated.every(reg => {
+          const attempts = (attemptsQuery.data || []).filter((a: any) => a.athlete_id === reg.athlete_id && a.lift_type === lift_type);
+          return attempts.length >= 1;
+        });
+        if (allDoneOpener) {
+          setPendingAttempt({
+            athleteId: updated[0]?.athlete_id,
+            liftType: lift_type,
+            attemptNumber: 2,
+            competitionId: activeCompetition.id,
+            result: 'valid', // Default, se cambia según botón
+          });
+          setShowNextAttemptModal(true);
+        }
       }).catch((error) => {
         toast({
           title: "Error al registrar intento",
@@ -160,7 +185,7 @@ const [rotatedRegistrations, setRotatedRegistrations] = useState<any[]>([]);
       });
       return;
     }
-    // Solo abrir el modal para el segundo y tercer intento
+    // Abrir el modal para el segundo y tercer intento
     if (attempt_number === 2 || attempt_number === 3) {
       setPendingAttempt({
         athleteId: registration.athlete_id,
@@ -205,50 +230,46 @@ const [rotatedRegistrations, setRotatedRegistrations] = useState<any[]>([]);
         description: `Resultado registrado`,
         variant: pendingAttempt.result === 'valid' ? "default" : "destructive"
       });
-      // Si es el tercer intento, rota atleta
-      if (pendingAttempt.attemptNumber === 3) {
-        // Cambiar de modalidad si todos los atletas completaron 3 intentos
-        const allDone = rotatedRegistrations.every(reg => {
-          const attempts = (attemptsQuery.data || []).filter((a: any) => a.athlete_id === reg.athlete_id && a.lift_type === pendingAttempt.liftType);
-          return attempts.length >= 3;
-        });
-        if (allDone) {
-          // Cambiar modalidad en orden: squat -> bench -> deadlift
-          const liftOrder = ['squat', 'bench', 'deadlift'];
-          const currentLiftIdx = liftOrder.indexOf(pendingAttempt.liftType);
-          if (currentLiftIdx !== -1 && currentLiftIdx < liftOrder.length - 1) {
-            const nextLift = liftOrder[currentLiftIdx + 1];
-            if (liveState) {
-              updateLiveState.mutate({
-                id: liveState.id,
-                current_lift_type: nextLift,
-                current_round: 1,
-                timer_seconds: 60,
-                is_timer_running: false
-              });
-            }
-            // Resetear los registros rotados y seleccionar el primer atleta para la nueva modalidad
-            setRotatedRegistrations([...registrations]);
-            setSelectedAthleteId(registrations[0]?.id || null);
-            toast({
-              title: `Cambio a modalidad: ${nextLift.toUpperCase()}`,
-              description: `Inicia el primer intento (opener) de ${nextLift}`,
-              variant: 'default'
+      // Rotar atleta después de cada intento (segundo y tercero)
+      const currentIdx = rotatedRegistrations.findIndex(r => r.athlete_id === pendingAttempt.athleteId);
+      if (currentIdx !== -1) {
+        const updated = [...rotatedRegistrations];
+        const [moved] = updated.splice(currentIdx, 1);
+        updated.push(moved);
+        setRotatedRegistrations(updated);
+        setSelectedAthleteId(updated[0]?.id || null);
+      }
+      // Si todos han hecho el intento actual, avanzar de ronda o cambiar modalidad
+      const allDone = rotatedRegistrations.every(reg => {
+        const attempts = (attemptsQuery.data || []).filter((a: any) => a.athlete_id === reg.athlete_id && a.lift_type === pendingAttempt.liftType);
+        return attempts.length >= pendingAttempt.attemptNumber;
+      });
+      if (pendingAttempt.attemptNumber === 3 && allDone) {
+        // Cambiar modalidad en orden: squat -> bench -> deadlift
+        const liftOrder = ['squat', 'bench', 'deadlift'];
+        const currentLiftIdx = liftOrder.indexOf(pendingAttempt.liftType);
+        if (currentLiftIdx !== -1 && currentLiftIdx < liftOrder.length - 1) {
+          const nextLift = liftOrder[currentLiftIdx + 1];
+          if (liveState) {
+            updateLiveState.mutate({
+              id: liveState.id,
+              current_lift_type: nextLift,
+              current_round: 1,
+              timer_seconds: 60,
+              is_timer_running: false
             });
-            return;
           }
-        }
-        // Si no hay cambio de modalidad, rota atleta normalmente
-        const currentIdx = rotatedRegistrations.findIndex(r => r.id === pendingAttempt.athleteId);
-        if (currentIdx !== -1) {
-          const updated = [...rotatedRegistrations];
-          const [moved] = updated.splice(currentIdx, 1);
-          updated.push(moved);
-          setRotatedRegistrations(updated);
-          setSelectedAthleteId(updated[0]?.id || null);
+          // Resetear los registros rotados y seleccionar el primer atleta para la nueva modalidad
+          setRotatedRegistrations([...registrations]);
+          setSelectedAthleteId(registrations[0]?.id || null);
+          toast({
+            title: `Cambio a modalidad: ${nextLift.toUpperCase()}`,
+            description: `Inicia el primer intento (opener) de ${nextLift}`,
+            variant: 'default'
+          });
+          return;
         }
       }
-      // Si no es el tercer intento, solo cierra el modal y espera el siguiente flujo
     } catch (error) {
       toast({
         title: "Error al registrar intento",
